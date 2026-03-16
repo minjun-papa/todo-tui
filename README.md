@@ -34,6 +34,7 @@
 | ⌨️ **키보드 중심** | 마우스 없이 키보드만으로 모든 조작 가능 |
 | 📅 **시즌 관리** | 프로젝트/기간별로 시즌을 나누어 관리 |
 | 🔗 **Jira 동기화** | Jira와 양방향 동기화 지원 |
+| 🤖 **Claude MCP 연동** | Claude와 MCP로 직접 연동하여 작업 관리 |
 | 📈 **리포트** | 오늘/주간/시즌별 리포트 생성 |
 
 ### 📸 스크린샷
@@ -180,6 +181,79 @@ python3 -m todo_tui.main
 ```bash
 cp /Users/sun/Document/01_project/todo-cli/config.json ~/.todo-tui/
 cp -r /Users/sun/todos ~/.todo-tui/
+```
+
+### 🤖 Claude MCP 연동
+
+Claude Desktop에서 Todo 앱을 직접 제어할 수 있습니다.
+
+#### 설치
+
+1. Python 3.10+ 가상환경 생성 및 의존성 설치:
+
+```bash
+cd /Users/sun/Document/01_project/todo-cli
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install mcp textual requests
+```
+
+2. Claude Desktop 설정 파일 업데이트 (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "todo-tui": {
+      "command": "/Users/sun/Document/01_project/todo-cli/.venv/bin/python3",
+      "args": ["/Users/sun/Document/01_project/todo-cli/todo_mcp_server.py"]
+    }
+  }
+}
+```
+
+3. Claude Desktop 재시작
+
+#### 사용 가능한 MCP 도구
+
+| 도구 | 설명 |
+|------|------|
+| `todo_add` | 새 Todo 항목 추가 (Epic/Story/Task) |
+| `todo_done` | 항목 완료 처리 |
+| `todo_start` | 항목 진행중으로 변경 |
+| `todo_list` | Todo 목록 조회 |
+| `todo_get` | 특정 항목 상세 조회 |
+| `todo_delete` | 항목 삭제 |
+| `todo_update_description` | 설명 수정 |
+| `todo_stats` | 통계 조회 |
+| `todo_set_status` | 상태 직접 설정 |
+| `season_list` | 시즌 목록 조회 |
+| `season_current` | 현재 시즌 정보 |
+
+#### 사용 예시
+
+```
+User: "로그인 기능 구현해줘"
+
+Claude: [MCP 도구 호출]
+1. todo_add("로그인 기능", type="epic")
+   → Created epic id=10
+
+2. todo_add("로그인 UI", type="story", parent_id=10)
+   → Created story id=11
+
+3. todo_add("로그인 API", type="story", parent_id=10)
+   → Created story id=12
+
+4. todo_add("로그인 버튼 구현", type="task", parent_id=11)
+   → Created task id=13
+
+[작업 진행 중...]
+5. todo_start(13)
+   → Status: in_progress
+
+[작업 완료]
+6. todo_done(13)
+   → Status: done
 ```
 
 ### 🎨 아이콘 가이드
