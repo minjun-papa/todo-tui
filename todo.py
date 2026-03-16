@@ -2017,6 +2017,7 @@ class TodoListScreen(Screen):
         Binding("c", "collapse_all", "전체접음"),
         Binding("S", "season", "시즌"),
         Binding("r", "report", "리포트"),
+        Binding("f5", "refresh", "새로고침"),
         Binding("j", "jira_sync", "Jira동기화"),
         Binding("ctrl+j", "jira_settings", "Jira설정"),
         Binding("q", "quit", "종료"),
@@ -2024,6 +2025,7 @@ class TodoListScreen(Screen):
 
     selected_todo_id = reactive(None)
     selected_todo_type = reactive(None)
+    _last_file_mtime: float = 0  # 파일 수정 시간 추적
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -2073,6 +2075,25 @@ class TodoListScreen(Screen):
 
     def on_mount(self):
         self._refresh_tree()
+        # 파일 변경 감지를 위한 타이머 시작 (2초마다 체크)
+        self._last_file_mtime = self._get_file_mtime()
+        self.set_interval(2, self._check_file_changes)
+
+    def _get_file_mtime(self) -> float:
+        """파일 수정 시간 가져오기"""
+        try:
+            return self.app.manager.todo_file.stat().st_mtime
+        except:
+            return 0
+
+    def _check_file_changes(self):
+        """파일 변경 감지 및 자동 새로고침"""
+        current_mtime = self._get_file_mtime()
+        if current_mtime > self._last_file_mtime:
+            self._last_file_mtime = current_mtime
+            # 파일이 변경되면 데이터 다시 로드
+            self.app.manager._load_todos()
+            self._refresh_tree()
 
     def _get_expanded_nodes(self, node) -> set:
         """확장된 노드들의 todo_id 수집"""
@@ -2271,6 +2292,17 @@ class TodoListScreen(Screen):
     def action_report(self):
         """리포트 화면"""
         self.app.push_screen(ReportScreen())
+
+    def action_refresh(self):
+        """수동 새로고침 (F5)"""
+        self.app.manager._load_todos()
+        self._last_file_mtime = self._get_file_mtime()
+        self._refresh_tree()
+        # 새로고침 알림
+        jira_bar = self.query_one("#jira-bar", Static)
+        original_text = jira_bar.renderable
+        jira_bar.update("🔄 새로고침 완료!")
+        self.set_timer(1.5, lambda: jira_bar.update(original_text))
 
     def action_jira_sync(self):
         """Jira 동기화"""
