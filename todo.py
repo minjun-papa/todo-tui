@@ -103,6 +103,8 @@ class TodoItem:
     season_id: Optional[int] = None
     jira_key: Optional[str] = None  # Jira 이슈 키 (예: PROJ-123)
     jira_id: Optional[str] = None   # Jira 이슈 ID
+    description: Optional[str] = None  # 항목 설명
+    order: int = 0  # 정렬 순서
 
     def to_dict(self):
         return {
@@ -118,7 +120,9 @@ class TodoItem:
             "parent_id": self.parent_id,
             "season_id": self.season_id,
             "jira_key": self.jira_key,
-            "jira_id": self.jira_id
+            "jira_id": self.jira_id,
+            "description": self.description,
+            "order": self.order
         }
 
     @classmethod
@@ -527,13 +531,18 @@ class TodoManager:
 
     def add_todo(self, content: str, type: str = "task", category: str = "general",
                  priority: str = "medium", due_date: Optional[str] = None,
-                 parent_id: Optional[int] = None, season_id: Optional[int] = None) -> TodoItem:
+                 parent_id: Optional[int] = None, season_id: Optional[int] = None,
+                 description: Optional[str] = None) -> TodoItem:
         """새 할 일을 추가합니다."""
         new_id = max([t.id for t in self.todos], default=0) + 1
 
         # season_id가 지정되지 않았으면 현재 시즌 사용
         if season_id is None and self.season_manager:
             season_id = self.season_manager.current_season_id
+
+        # 같은 부모를 가진 항목 중 최대 order 찾기
+        siblings = [t for t in self.todos if t.parent_id == parent_id]
+        max_order = max([t.order for t in siblings], default=-1) + 1 if siblings else 0
 
         todo = TodoItem(
             id=new_id,
@@ -545,7 +554,9 @@ class TodoManager:
             status="todo",
             created_at=datetime.now().strftime("%Y-%m-%d"),
             parent_id=parent_id,
-            season_id=season_id
+            season_id=season_id,
+            description=description,
+            order=max_order
         )
 
         self.todos.append(todo)
@@ -673,6 +684,230 @@ class TodoManager:
         """진행중인 항목 반환 (Epic 제외)"""
         return [t for t in self.todos if t.status == "in_progress" and t.type != "epic"]
 
+    def get_todo_by_id(self, todo_id: int) -> Optional[TodoItem]:
+        """ID로 Todo 항목 찾기"""
+        for todo in self.todos:
+            if todo.id == todo_id:
+                return todo
+        return None
+
+    def move_item_up(self, todo_id: int) -> bool:
+        """항목을 위로 이동 (같은 부모 내에서)"""
+        todo = self.get_todo_by_id(todo_id)
+        if not todo:
+            return False
+
+        # 같은 부모를 가진 형제 항목들 찾기
+        siblings = sorted(
+            [t for t in self.todos if t.parent_id == todo.parent_id],
+            key=lambda t: t.order
+        )
+
+        if len(siblings) <= 1:
+            return False
+
+        # 현재 항목의 인덱스 찾기
+        current_idx = next((i for i, s in enumerate(siblings) if s.id == todo_id), -1)
+        if current_idx <= 0:
+            return False  # 이미 첫 번째
+
+        # 순서 교환
+        prev_sibling = siblings[current_idx - 1]
+        todo.order, prev_sibling.order = prev_sibling.order, todo.order
+        self._save_todos()
+        return True
+
+    def move_item_down(self, todo_id: int) -> bool:
+        """항목을 아래로 이동 (같은 부모 내에서)"""
+        todo = self.get_todo_by_id(todo_id)
+        if not todo:
+            return False
+
+        # 같은 부모를 가진 형제 항목들 찾기
+        siblings = sorted(
+            [t for t in self.todos if t.parent_id == todo.parent_id],
+            key=lambda t: t.order
+        )
+
+        if len(siblings) <= 1:
+            return False
+
+        # 현재 항목의 인덱스 찾기
+        current_idx = next((i for i, s in enumerate(siblings) if s.id == todo_id), -1)
+        if current_idx < 0 or current_idx >= len(siblings) - 1:
+            return False  # 이미 마지막
+
+        # 순서 교환
+        next_sibling = siblings[current_idx + 1]
+        todo.order, next_sibling.order = next_sibling.order, todo.order
+        self._save_todos()
+        return True
+
+    def update_description(self, todo_id: int, description: Optional[str]) -> bool:
+        """항목 설명 업데이트"""
+        todo = self.get_todo_by_id(todo_id)
+        if todo:
+            todo.description = description
+            self._save_todos()
+            return True
+        return False
+
+
+class DescriptionPopup(Screen):
+    """설명 팝업 화면"""
+
+    CSS = """
+    DescriptionPopup {
+        align: center middle;
+    }
+
+    .popup-container {
+        width: 60;
+        max-height: 20;
+        border: solid yellow;
+        padding: 1 2;
+        background: $surface;
+    }
+
+    .popup-title {
+        text-align: center;
+        text-style: bold;
+        color: yellow;
+        margin-bottom: 1;
+    }
+
+    .popup-content {
+        margin-bottom: 1;
+    }
+
+    .button-row {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "닫기"),
+        Binding("e", "edit", "수정"),
+    ]
+
+    def __init__(self, todo_id: int, content: str, description: Optional[str] = None):
+        super().__init__()
+        self.todo_id = todo_id
+        self.todo_content = content
+        self.todo_description = description
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="popup-container"):
+            yield Static("📝 항목 상세 정보", classes="popup-title")
+            yield Static(f"제목: {self.todo_content}", classes="popup-content")
+            yield Static(f"설명: {self.todo_description or '(설명 없음)'}", classes="popup-content", id="desc_text")
+            with Horizontal(classes="button-row"):
+                yield Button("수정", variant="primary", id="edit")
+                yield Button("닫기", variant="default", id="close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.app.pop_screen()
+        elif event.button.id == "edit":
+            self.app.push_screen(EditDescriptionScreen(self.todo_id, self.todo_description))
+
+    def action_close(self):
+        self.app.pop_screen()
+
+    def action_edit(self):
+        self.app.push_screen(EditDescriptionScreen(self.todo_id, self.todo_description))
+
+    def on_screen_resume(self):
+        """EditDescriptionScreen에서 돌아올 때 설명 새로고침"""
+        todo = self.app.manager.get_todo_by_id(self.todo_id)
+        if todo:
+            self.todo_description = todo.description
+            desc_text = self.query_one("#desc_text", Static)
+            desc_text.update(f"설명: {self.todo_description or '(설명 없음)'}")
+
+
+class EditDescriptionScreen(Screen):
+    """설명 수정 화면"""
+
+    CSS = """
+    EditDescriptionScreen {
+        align: center middle;
+    }
+
+    .edit-container {
+        width: 60;
+        height: auto;
+        border: solid green;
+        padding: 1 2;
+        background: $surface;
+    }
+
+    .title {
+        text-align: center;
+        text-style: bold;
+        color: green;
+        margin-bottom: 1;
+    }
+
+    TextArea {
+        width: 100%;
+        height: 8;
+        margin-bottom: 1;
+    }
+
+    .button-row {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "취소"),
+        Binding("ctrl+s", "save", "저장"),
+    ]
+
+    def __init__(self, todo_id: int, current_description: Optional[str] = None):
+        super().__init__()
+        self.todo_id = todo_id
+        self.current_description = current_description or ""
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import TextArea
+        with Container(classes="edit-container"):
+            yield Static("📝 설명 수정", classes="title")
+            yield TextArea(self.current_description, id="description")
+            with Horizontal(classes="button-row"):
+                yield Button("저장", variant="success", id="save")
+                yield Button("취소", variant="error", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save":
+            self.action_save()
+        elif event.button.id == "cancel":
+            self.app.pop_screen()
+
+    def action_save(self):
+        from textual.widgets import TextArea
+        description = self.query_one("#description", TextArea).text.strip()
+        if description == "":
+            description = None
+        self.app.manager.update_description(self.todo_id, description)
+        self.app.pop_screen()
+
+    def action_cancel(self):
+        self.app.pop_screen()
+
 
 class AddTodoScreen(Screen):
     """할 일 추가 화면"""
@@ -770,6 +1005,9 @@ class AddTodoScreen(Screen):
             yield Label("내용 *")
             yield Input(placeholder="항목 내용을 입력하세요", id="content")
 
+            yield Label("설명")
+            yield Input(placeholder="항목 설명 (선택사항)", id="description")
+
             # 추가 옵션 토글 버튼
             yield Button("▶ 추가 옵션 (우선순위, 마감일)", id="toggle_options", classes="options-toggle")
 
@@ -840,10 +1078,13 @@ class AddTodoScreen(Screen):
         type_value = self.query_one("#type", Select).value or "task"
         priority = self.query_one("#priority", Select).value or "medium"
         due_date = self.query_one("#due_date", Input).value.strip() or None
+        description = self.query_one("#description", Input).value.strip() or None
 
         # 빈 문자열이면 None으로 변환
         if due_date == "":
             due_date = None
+        if description == "":
+            description = None
 
         # 부모 ID 설정 (생성자에서 받은 값 사용)
         parent_id = self.default_parent_id
@@ -854,7 +1095,8 @@ class AddTodoScreen(Screen):
             category="general",  # 카테고리는 기본값 사용
             priority=priority,
             due_date=due_date,
-            parent_id=parent_id
+            parent_id=parent_id,
+            description=description
         )
         self.app.pop_screen()
 
@@ -1758,19 +2000,6 @@ class TodoListScreen(Screen):
     .stats-row {
         height: 2;
     }
-
-    .in-progress-bar {
-        dock: top;
-        background: $warning;
-        color: $text;
-        padding: 1;
-        margin-top: 5;
-    }
-
-    .in-progress-title {
-        text-style: bold;
-        margin-bottom: 1;
-    }
     """
 
     BINDINGS = [
@@ -1779,6 +2008,9 @@ class TodoListScreen(Screen):
         Binding("A", "add_child", "하위추가"),
         Binding("s", "change_status", "상태변경"),
         Binding("d", "delete", "삭제"),
+        Binding("i", "show_info", "상세정보"),
+        Binding("ctrl+up", "move_up", "위로이동"),
+        Binding("ctrl+down", "move_down", "아래로이동"),
         Binding("right", "expand", "펼치기"),
         Binding("left", "collapse", "접기"),
         Binding("e", "expand_all", "전체펼침"),
@@ -1799,7 +2031,6 @@ class TodoListScreen(Screen):
             yield Static(self._get_jira_status(), id="jira-bar", classes="jira-bar")
             yield Static(self._get_season_info(), id="season-bar", classes="season-bar")
             yield Static(self._get_stats(), id="stats", classes="stats-bar")
-            yield Static(self._get_in_progress(), id="in-progress", classes="in-progress-bar")
             yield TodoTree("📋 Todo List", id="todo-tree")
         yield Footer()
 
@@ -1839,27 +2070,6 @@ class TodoListScreen(Screen):
             f"📊 전체: {stats['total']} | 📋 대기: {stats['todo']} | 🔄 진행중: {stats['in_progress']} | ✅ 완료: {stats['done']}\n"
             f"📁 Epic: {stats['epics']} | 📖 Story: {stats['stories']} | ✅ Task: {stats['tasks']}"
         )
-
-    def _get_in_progress(self) -> str:
-        """진행중인 항목 목록 반환"""
-        # 현재 시즌의 진행중 항목만 표시
-        if self.app.season_manager and self.app.season_manager.current_season_id:
-            todos = self.app.manager.get_todos_by_season(self.app.season_manager.current_season_id)
-            in_progress_items = [t for t in todos if t.status == "in_progress" and t.type != "epic"]
-        else:
-            in_progress_items = self.app.manager.get_in_progress_items()
-
-        if not in_progress_items:
-            return "🔄 진행중: 없음"
-
-        items_str = " | ".join([
-            f"{t.content} ({t.type})"
-            for t in in_progress_items[:5]  # 최대 5개까지만 표시
-        ])
-        if len(in_progress_items) > 5:
-            items_str += f" ... 외 {len(in_progress_items) - 5}개"
-
-        return f"🔄 진행중 ({len(in_progress_items)}): {items_str}"
 
     def on_mount(self):
         self._refresh_tree()
@@ -1913,14 +2123,11 @@ class TodoListScreen(Screen):
         stats = self.query_one("#stats", Static)
         stats.update(self._get_stats())
 
-        # 진행중 항목 업데이트
-        in_progress = self.query_one("#in-progress", Static)
-        in_progress.update(self._get_in_progress())
-
     def _build_tree_nodes(self, parent_node, items: List[TodoItem]):
         """재귀적으로 트리 노드 빌드"""
-        # 타입 및 우선순위로 정렬
+        # order, 타입, 우선순위로 정렬
         items = sorted(items, key=lambda t: (
+            t.order,
             TodoManager.TYPE_ORDER.get(t.type, 99),
             {"high": 0, "medium": 1, "low": 2}.get(t.priority, 1)
         ))
@@ -1937,7 +2144,8 @@ class TodoListScreen(Screen):
 
             due_str = f" (due: {todo.due_date})" if todo.due_date else ""
             jira_str = f" [{todo.jira_key}]" if todo.jira_key else ""
-            label = f"{status_icon} {type_icon} {priority_icon} [{todo.category}] {todo.content}{jira_str}{due_str}"
+            desc_str = " 📝" if todo.description else ""
+            label = f"{status_icon} {type_icon} {priority_icon} [{todo.category}] {todo.content}{jira_str}{due_str}{desc_str}"
 
             # 노드 데이터 생성
             node_data = type('NodeData', (), {
@@ -2005,6 +2213,29 @@ class TodoListScreen(Screen):
             self.app.manager.delete_todo(self.selected_todo_id)
             self.selected_todo_id = None
             self._refresh_tree()
+
+    def action_show_info(self):
+        """상세 정보 팝업 표시"""
+        if self.selected_todo_id:
+            todo = self.app.manager.get_todo_by_id(self.selected_todo_id)
+            if todo:
+                self.app.push_screen(DescriptionPopup(
+                    todo_id=todo.id,
+                    content=todo.content,
+                    description=todo.description
+                ))
+
+    def action_move_up(self):
+        """항목을 위로 이동"""
+        if self.selected_todo_id:
+            if self.app.manager.move_item_up(self.selected_todo_id):
+                self._refresh_tree()
+
+    def action_move_down(self):
+        """항목을 아래로 이동"""
+        if self.selected_todo_id:
+            if self.app.manager.move_item_down(self.selected_todo_id):
+                self._refresh_tree()
 
     def action_expand(self):
         """선택 노드 펼치기"""
