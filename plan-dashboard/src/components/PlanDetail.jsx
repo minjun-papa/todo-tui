@@ -3,6 +3,7 @@
   var html = htm.bind(React.createElement);
   var useState = React.useState;
   var useMemo = React.useMemo;
+  var useEffect = React.useEffect;
 
   function pCls(r) { return r < 30 ? 'low' : r < 70 ? 'mid' : 'high'; }
 
@@ -50,6 +51,35 @@
     var ref1 = useState(false), showAdd = ref1[0], setShowAdd = ref1[1];
     var ref2 = useState(''), newContent = ref2[0], setNewContent = ref2[1];
     var ref3 = useState('task'), newType = ref3[0], setNewType = ref3[1];
+    var ref4 = useState([]), historyEntries = ref4[0], setHistoryEntries = ref4[1];
+    var ref5 = useState(false), showAddHistory = ref5[0], setShowAddHistory = ref5[1];
+    var ref6 = useState(''), newHistoryContent = ref6[0], setNewHistoryContent = ref6[1];
+    var ref7 = useState('progress'), newHistoryType = ref7[0], setNewHistoryType = ref7[1];
+    var ref8 = useState('assistant'), newHistoryRole = ref8[0], setNewHistoryRole = ref8[1];
+
+    function loadHistory() {
+      window.DataAccess.fetchHistory(planId).then(function(entries) {
+        setHistoryEntries(entries);
+      });
+    }
+
+    useEffect(function() {
+      loadHistory();
+    }, [planId]);
+
+    function handleAddHistory(e) {
+      e.preventDefault();
+      if (!newHistoryContent.trim()) return;
+      window.DataAccess.addHistory(planId, newHistoryContent.trim(), newHistoryRole, newHistoryType).then(function() {
+        setNewHistoryContent('');
+        setShowAddHistory(false);
+        loadHistory();
+      });
+    }
+
+    var sortedHistory = historyEntries.slice().sort(function(a, b) {
+      return b.id - a.id;
+    });
 
     var planTodos = useMemo(function() { return todos.filter(function(t) { return t.plan_id === planId; }); }, [todos, planId]);
     var rootTodos = useMemo(function() { return planTodos.filter(function(t) { return t.parent_id === null; }); }, [planTodos]);
@@ -136,6 +166,53 @@
       ${addForm}
       <div class="tree-node root">${rootEls}</div>
       ${rootTodos.length===0&&html`<div class="empty" style=${{padding:'30px'}}><div class="empty-text">No tasks in this plan</div></div>`}
+      <div style=${{marginTop:'24px'}}>
+        <div style=${{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'12px'}}>
+          <h3 style=${{fontSize:'14px'}}>Session History</h3>
+          ${plan.status==='active'&&html`<button class="btn btn-sm btn-primary" onClick=${function(){setShowAddHistory(!showAddHistory)}}>+ Log Entry</button>`}
+        </div>
+        ${showAddHistory && html`<div style=${{background:'var(--surface)',border:'1px solid var(--primary)',borderRadius:'var(--radius)',padding:'12px 16px',marginBottom:'12px'}}>
+          <form onSubmit=${handleAddHistory}>
+            <div style=${{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              <select value=${newHistoryRole} onChange=${function(e){setNewHistoryRole(e.target.value)}} style=${{padding:'6px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'4px',color:'var(--text)'}}>
+                <option value="assistant">Assistant</option>
+                <option value="user">User</option>
+              </select>
+              <select value=${newHistoryType} onChange=${function(e){setNewHistoryType(e.target.value)}} style=${{padding:'6px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'4px',color:'var(--text)'}}>
+                <option value="progress">Progress</option>
+                <option value="note">Note</option>
+                <option value="error">Error</option>
+                <option value="decision">Decision</option>
+              </select>
+            </div>
+            <div style=${{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              <input type="text" placeholder="Log message..." value=${newHistoryContent} onInput=${function(e){setNewHistoryContent(e.target.value)}} style=${{flex:1,padding:'6px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'4px',color:'var(--text)'}} />
+            </div>
+            <div style=${{display:'flex',justifyContent:'flex-end',gap:'6px'}}>
+              <button type="button" class="btn btn-sm" onClick=${function(){setShowAddHistory(false)}}>Cancel</button>
+              <button type="submit" class="btn btn-sm btn-primary">Add</button>
+            </div>
+          </form>
+        </div>`}
+        ${sortedHistory.length > 0 ? html`<div style=${{display:'flex',flexDirection:'column',gap:'0'}}>
+          ${sortedHistory.map(function(entry) {
+            var roleIcon = entry.role === 'user' ? '\uD83D\uDC64' : '\uD83E\uDD16';
+            var typeColor = entry.entry_type === 'progress' ? 'var(--primary)' : entry.entry_type === 'error' ? '#e74c3c' : entry.entry_type === 'decision' ? '#9b59b6' : 'var(--text-muted)';
+            var typeLabel = entry.entry_type || 'progress';
+            var timeStr = entry.created_at ? new Date(entry.created_at).toLocaleString('ko-KR') : '';
+            return html`<div style=${{display:'flex',gap:'10px',padding:'10px 12px',borderBottom:'1px solid var(--border)',alignItems:'flex-start'}}>
+              <span style=${{fontSize:'16px',flexShrink:0}}>${roleIcon}</span>
+              <div style=${{flex:1,minWidth:0}}>
+                <div style=${{display:'flex',gap:'8px',alignItems:'center',marginBottom:'4px'}}>
+                  <span style=${{fontSize:'11px',padding:'1px 6px',borderRadius:'3px',background:typeColor,color:'#fff',fontWeight:500}}>${typeLabel}</span>
+                  <span style=${{fontSize:'11px',color:'var(--text-muted)'}}>${timeStr}</span>
+                </div>
+                <div style=${{fontSize:'13px',color:'var(--text)',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>${entry.content}</div>
+              </div>
+            </div>`;
+          })}
+        </div>` : html`<div class="empty" style=${{padding:'20px'}}><div class="empty-text">No session history yet</div></div>`}
+      </div>
     </div>`;
   };
 })();

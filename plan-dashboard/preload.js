@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('api', {
   todoSetStatus: (id, status) => ipcRenderer.invoke('todo:setStatus', id, status),
   todoDelete: (id) => ipcRenderer.invoke('todo:delete', id),
 
+  // History
+  historyList: (planId) => ipcRenderer.invoke('history:list', planId),
+  historyAdd: (planId, content, role, entryType) => ipcRenderer.invoke('history:add', planId, content, role, entryType),
+
   // File watching
   watchStart: () => ipcRenderer.invoke('watch:start'),
   watchStop: () => ipcRenderer.invoke('watch:stop'),

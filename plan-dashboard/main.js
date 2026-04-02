@@ -185,6 +185,30 @@ ipcMain.handle('todo:delete', (_e, id) => {
   return todos.length < len;
 });
 
+// --- History IPC ---
+ipcMain.handle('history:list', (_e, planId) => {
+  const historyFile = path.join(TODO_DIR, 'history.json');
+  const entries = readJsonFile(historyFile);
+  return entries.filter(e => e.plan_id === planId);
+});
+
+ipcMain.handle('history:add', (_e, planId, content, role, entryType) => {
+  const historyFile = path.join(TODO_DIR, 'history.json');
+  const entries = readJsonFile(historyFile);
+  const newId = entries.reduce((max, e) => Math.max(max, e.id || 0), 0) + 1;
+  const entry = {
+    id: newId,
+    plan_id: planId,
+    role: role || 'assistant',
+    content: content,
+    entry_type: entryType || 'progress',
+    created_at: new Date().toISOString().slice(0, 19)
+  };
+  entries.push(entry);
+  writeJsonFile(historyFile, entries);
+  return entry;
+});
+
 // --- File Watch (polling) ---
 let watchers = {};
 

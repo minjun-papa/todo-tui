@@ -41,6 +41,14 @@ window.DataAccess = {
     return window.api.todoDelete(id);
   },
 
+  async fetchHistory(planId) {
+    return window.api.historyList(planId);
+  },
+
+  async addHistory(planId, content, role, entryType) {
+    return window.api.historyAdd(planId, content, role, entryType);
+  },
+
   startWatching(callback) {
     window.api.watchStart();
     window.api.onDataChanged(callback);

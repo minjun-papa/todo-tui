@@ -896,6 +896,78 @@ class PlanManager:
         }
 
 
+@dataclass
+class HistoryEntry:
+    """세션 히스토리 엔트리 - 대화 기록, 결정 사항, 이슈 등"""
+    id: int
+    plan_id: int
+    role: str = "assistant"  # user, assistant, system
+    content: str = ""
+    entry_type: str = "progress"  # progress, issue, decision, summary, note
+    created_at: str = ""
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "plan_id": self.plan_id,
+            "role": self.role,
+            "content": self.content,
+            "entry_type": self.entry_type,
+            "created_at": self.created_at,
+        }
+
+
+class HistoryManager:
+    """세션 히스토리 관리 - ~/todos/history.json"""
+
+    def __init__(self, todo_dir: Path = None):
+        if todo_dir is None:
+            todo_dir = Path.home() / "todos"
+        self.history_file = todo_dir / "history.json"
+        self._entries: List[HistoryEntry] = []
+        self._load()
+
+    def _load(self):
+        self._entries = []
+        if not self.history_file.exists():
+            return
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for item in data:
+                self._entries.append(HistoryEntry(**item))
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    def _save(self):
+        self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.history_file, "w", encoding="utf-8") as f:
+            json.dump([e.to_dict() for e in self._entries], f, ensure_ascii=False, indent=2)
+
+    def add_entry(self, plan_id: int, content: str, role: str = "assistant",
+                  entry_type: str = "progress") -> HistoryEntry:
+        new_id = max((e.id for e in self._entries), default=0) + 1
+        from datetime import datetime
+        entry = HistoryEntry(
+            id=new_id,
+            plan_id=plan_id,
+            role=role,
+            content=content,
+            entry_type=entry_type,
+            created_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        )
+        self._entries.append(entry)
+        self._save()
+        return entry
+
+    def get_entries(self, plan_id: int) -> List[HistoryEntry]:
+        return [e for e in self._entries if e.plan_id == plan_id]
+
+    def delete_entries(self, plan_id: int):
+        self._entries = [e for e in self._entries if e.plan_id != plan_id]
+        self._save()
+
+
 class DescriptionPopup(Screen):
     """설명 팝업 화면"""
 

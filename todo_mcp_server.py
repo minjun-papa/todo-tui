@@ -22,7 +22,7 @@ except ImportError:
 
 # 기존 TodoManager 임포트
 sys.path.insert(0, str(Path(__file__).parent))
-from todo import TodoManager, SeasonManager, TodoItem, PlanManager, Plan
+from todo import TodoManager, SeasonManager, TodoItem, PlanManager, Plan, HistoryManager
 
 
 class TodoMCPServer:
@@ -34,6 +34,7 @@ class TodoMCPServer:
         season_manager = SeasonManager(Path(__file__).parent / "config.json")
         self.manager.set_season_manager(season_manager)
         self.plan_manager = PlanManager(self.manager.todo_file)
+        self.history_manager = HistoryManager(self.manager.todo_file)
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -336,6 +337,50 @@ class TodoMCPServer:
                         },
                         "required": ["plan_id"]
                     }
+                ),
+                Tool(
+                    name="plan_log",
+                    description="Plan에 작업 로그/히스토리 기록. 중요한 결정, 진행 상황, 이슈 등을 기록.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "Plan ID"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "로그 내용 (필수)"
+                            },
+                            "entry_type": {
+                                "type": "string",
+                                "enum": ["progress", "issue", "decision", "summary", "note"],
+                                "default": "progress",
+                                "description": "로그 타입: progress(진행상황), issue(이슈), decision(결정), summary(요약), note(메모)"
+                            },
+                            "role": {
+                                "type": "string",
+                                "enum": ["user", "assistant", "system"],
+                                "default": "assistant",
+                                "description": "발화자"
+                            }
+                        },
+                        "required": ["plan_id", "content"]
+                    }
+                ),
+                Tool(
+                    name="plan_logs",
+                    description="Plan의 작업 로그/히스토리 목록 조회",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "Plan ID"
+                            }
+                        },
+                        "required": ["plan_id"]
+                    }
                 )
             ]
 
@@ -376,6 +421,10 @@ class TodoMCPServer:
                     return await self._plan_update(arguments)
                 elif name == "plan_delete":
                     return await self._plan_delete(arguments)
+                elif name == "plan_log":
+                    return await self._plan_log(arguments)
+                elif name == "plan_logs":
+                    return await self._plan_logs(arguments)
                 else:
                     return [TextContent(type="text", text=f"알 수 없는 도구: {name}")]
             except Exception as e:
@@ -826,6 +875,49 @@ class TodoMCPServer:
             type="text",
             text=f"Deleted plan [{plan_id}] {plan.name}"
         )]
+
+    async def _plan_log(self, args: dict) -> List[TextContent]:
+        """Plan에 작업 로그 기록"""
+        plan_id = args.get("plan_id")
+        content = args.get("content")
+        if not plan_id or not content:
+            return [TextContent(type="text", text="오류: plan_id와 content는 필수 항목입니다.")]
+
+        plan = self.plan_manager.get_plan(plan_id)
+        if not plan:
+            return [TextContent(type="text", text=f"오류: ID {plan_id}인 Plan을 찾을 수 없습니다.")]
+
+        entry = self.history_manager.add_entry(
+            plan_id=plan_id,
+            content=content,
+            role=args.get("role", "assistant"),
+            entry_type=args.get("entry_type", "progress"),
+        )
+
+        return [TextContent(
+            type="text",
+            text=f"Logged [{entry.entry_type}] to plan {plan_id}: {content[:80]}"
+        )]
+
+    async def _plan_logs(self, args: dict) -> List[TextContent]:
+        """Plan 작업 로그 조회"""
+        plan_id = args.get("plan_id")
+        if not plan_id:
+            return [TextContent(type="text", text="오류: plan_id는 필수 항목입니다.")]
+
+        entries = self.history_manager.get_entries(plan_id)
+        if not entries:
+            return [TextContent(type="text", text=f"Plan {plan_id}에 기록된 로그가 없습니다.")]
+
+        type_icons = {"progress": "📊", "issue": "⚠️", "decision": "✅", "summary": "📝", "note": "📌"}
+        lines = [f"📜 Plan {plan_id} 작업 로그 ({len(entries)}건):", ""]
+        for e in entries:
+            icon = type_icons.get(e.entry_type, "📌")
+            lines.append(f"  {icon} [{e.role}] {e.content}")
+            if e.created_at:
+                lines.append(f"     {e.created_at}")
+
+        return [TextContent(type="text", text="\n".join(lines))]
 
     async def run(self):
         """서버 실행"""

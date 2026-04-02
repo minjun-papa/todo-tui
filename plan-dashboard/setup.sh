@@ -35,6 +35,10 @@ if [ ! -f "$TODO_DATA_DIR/todos.json" ]; then
   echo '[]' > "$TODO_DATA_DIR/todos.json"
   echo "  created todos.json"
 fi
+if [ ! -f "$TODO_DATA_DIR/history.json" ]; then
+  echo '[]' > "$TODO_DATA_DIR/history.json"
+  echo "  created history.json"
+fi
 
 # --- 2. Python venv + deps ---
 echo "[2/6] Python 가상환경 설정..."
@@ -87,18 +91,14 @@ echo "[4/6] CLAUDE.md 자동 plan 지시어 설정..."
 mkdir -p "$CLAUDE_DIR"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 
-PLAN_BLOCK='## 자동 Plan 관리
-사용자가 새로운 작업을 요청하면, 작업 시작 전에 반드시 아래 절차를 따른다:
-1. 작업을 분석해서 plan_create 툴로 새 Plan을 생성한다
-   - name: 작업의 핵심을 요약한 이름
-   - working_dir: 현재 작업 디렉토리
-   - model: 현재 사용 중인 모델명
-   - prompt: 사용자의 원본 요청을 그대로 입력
-2. 작업을 세분화해서 todo_add 툴로 task들을 추가한다 (plan_id 지정)
-   - Epic > Story > Task 계층으로 구성
-3. 각 작업 단계를 시작할 때 todo_start로 in_progress로 변경
-4. 완료 시 todo_done으로 변경
-5. 전체 작업이 끝나면 plan_end 툴로 plan을 completed로 변경'
+PLAN_BLOCK='## Plan 관리 (명령어 기반)
+사용자가 명시적으로 다음과 같이 요청할 때만 plan을 생성하고 관리:
+- "/plan", "plan 시작", "계획 세워" 등으로 요청 시:
+  1. plan_create 툴로 Plan 생성 (name, working_dir, model, prompt)
+  2. todo_add 툴로 task 추가 (plan_id 지정, Epic > Story > Task)
+  3. 각 단계 시작 시 todo_start, 완료 시 todo_done
+  4. 작업 진행 중 plan_log 툴로 중요 결정/이슈/진행 상황 기록
+  5. 전체 완료 후 plan_end 툴로 Plan 종료'
 
 if [ -f "$CLAUDE_MD" ]; then
   if grep -q "자동 Plan 관리" "$CLAUDE_MD" 2>/dev/null; then
@@ -132,5 +132,6 @@ echo "     cd $PLAN_DASH_DIR && npm start"
 echo ""
 echo "  2. Open a new Claude Code session"
 echo "     -> Request a task and Plan is auto-created"
-echo "     -> Dashboard shows real-time progress"
+echo "     -> Request a task and Plan is auto-created"
+
 echo ""
