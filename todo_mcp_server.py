@@ -1,4 +1,4 @@
-#!/Users/sun/Document/01_project/todo-cli/.venv/bin/python3
+#!/usr/bin/env python3
 """Todo TUI MCP Server - Claude와 Todo 앱 연동
 
 MCP(Model Context Protocol) 서버를 통해 Claude가 Todo 앱을 직접 제어할 수 있게 합니다.
@@ -22,7 +22,7 @@ except ImportError:
 
 # 기존 TodoManager 임포트
 sys.path.insert(0, str(Path(__file__).parent))
-from todo import TodoManager, SeasonManager, TodoItem
+from todo import TodoManager, SeasonManager, TodoItem, PlanManager, Plan
 
 
 class TodoMCPServer:
@@ -33,6 +33,7 @@ class TodoMCPServer:
         self.manager = TodoManager()
         season_manager = SeasonManager(Path(__file__).parent / "config.json")
         self.manager.set_season_manager(season_manager)
+        self.plan_manager = PlanManager(self.manager.todo_file)
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -74,6 +75,10 @@ class TodoMCPServer:
                             "due_date": {
                                 "type": "string",
                                 "description": "마감일 (YYYY-MM-DD 형식)"
+                            },
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "연결할 Plan ID (선택사항)"
                             }
                         },
                         "required": ["content"]
@@ -218,6 +223,119 @@ class TodoMCPServer:
                         "type": "object",
                         "properties": {}
                     }
+                ),
+                Tool(
+                    name="plan_create",
+                    description="새 Plan 생성. Claude Code 작업 단위를 관리.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Plan 이름 (필수)"
+                            },
+                            "working_dir": {
+                                "type": "string",
+                                "description": "작업 디렉토리 경로"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "사용 모델명"
+                            },
+                            "prompt": {
+                                "type": "string",
+                                "description": "Plan 목적/프롬프트"
+                            }
+                        },
+                        "required": ["name"]
+                    }
+                ),
+                Tool(
+                    name="plan_end",
+                    description="Plan을 완료 상태로 종료",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "종료할 Plan ID"
+                            }
+                        },
+                        "required": ["plan_id"]
+                    }
+                ),
+                Tool(
+                    name="plan_list",
+                    description="Plan 목록 조회",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "enum": ["active", "completed", "cancelled"],
+                                "description": "상태 필터 (선택사항)"
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="plan_get",
+                    description="특정 Plan 상세 조회 (연관된 Todo 통계 포함)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "조회할 Plan ID"
+                            }
+                        },
+                        "required": ["plan_id"]
+                    }
+                ),
+                Tool(
+                    name="plan_update",
+                    description="Plan 정보 수정",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "수정할 Plan ID"
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "새 Plan 이름"
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["active", "completed", "cancelled"],
+                                "description": "새 상태"
+                            },
+                            "working_dir": {
+                                "type": "string",
+                                "description": "작업 디렉토리"
+                            },
+                            "model": {
+                                "type": "string",
+                                "description": "모델명"
+                            }
+                        },
+                        "required": ["plan_id"]
+                    }
+                ),
+                Tool(
+                    name="plan_delete",
+                    description="Plan 삭제",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "plan_id": {
+                                "type": "integer",
+                                "description": "삭제할 Plan ID"
+                            }
+                        },
+                        "required": ["plan_id"]
+                    }
                 )
             ]
 
@@ -246,6 +364,18 @@ class TodoMCPServer:
                     return await self._season_list(arguments)
                 elif name == "season_current":
                     return await self._season_current(arguments)
+                elif name == "plan_create":
+                    return await self._plan_create(arguments)
+                elif name == "plan_end":
+                    return await self._plan_end(arguments)
+                elif name == "plan_list":
+                    return await self._plan_list(arguments)
+                elif name == "plan_get":
+                    return await self._plan_get(arguments)
+                elif name == "plan_update":
+                    return await self._plan_update(arguments)
+                elif name == "plan_delete":
+                    return await self._plan_delete(arguments)
                 else:
                     return [TextContent(type="text", text=f"알 수 없는 도구: {name}")]
             except Exception as e:
@@ -265,6 +395,12 @@ class TodoMCPServer:
             description=args.get("description"),
             due_date=args.get("due_date")
         )
+
+        # plan_id 설정
+        plan_id = args.get("plan_id")
+        if plan_id:
+            todo.plan_id = plan_id
+            self.manager._save_todos()
 
         result = {
             "id": todo.id,
@@ -577,6 +713,118 @@ class TodoMCPServer:
         return [TextContent(
             type="text",
             text=f"📅 현재 시즌:\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+        )]
+
+    async def _plan_create(self, args: dict) -> List[TextContent]:
+        """새 Plan 생성"""
+        name = args.get("name")
+        if not name:
+            return [TextContent(type="text", text="오류: name은 필수 항목입니다.")]
+
+        plan = self.plan_manager.create_plan(
+            name=name,
+            working_dir=args.get("working_dir"),
+            model=args.get("model"),
+            prompt=args.get("prompt")
+        )
+
+        result = plan.to_dict()
+        return [TextContent(
+            type="text",
+            text=f"Created plan id={plan.id}: {plan.name}\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+        )]
+
+    async def _plan_end(self, args: dict) -> List[TextContent]:
+        """Plan 종료"""
+        plan_id = args.get("plan_id")
+        if not plan_id:
+            return [TextContent(type="text", text="오류: plan_id는 필수 항목입니다.")]
+
+        plan = self.plan_manager.end_plan(plan_id)
+        if not plan:
+            return [TextContent(type="text", text=f"오류: ID {plan_id}인 Plan을 찾을 수 없습니다.")]
+
+        return [TextContent(
+            type="text",
+            text=f"Completed plan [{plan.id}] {plan.name}"
+        )]
+
+    async def _plan_list(self, args: dict) -> List[TextContent]:
+        """Plan 목록 조회"""
+        status_filter = args.get("status")
+        plans = self.plan_manager.list_plans(status_filter)
+
+        if not plans:
+            return [TextContent(type="text", text="표시할 Plan이 없습니다.")]
+
+        lines = ["📋 Plan 목록:", ""]
+        for plan in plans:
+            stats = self.plan_manager.get_plan_stats(plan.id, self.manager.todos)
+            status_icon = {"active": "🔄", "completed": "✅", "cancelled": "❌"}.get(plan.status, "⬜")
+            lines.append(f"  {status_icon} [{plan.id}] {plan.name} ({plan.status}) - {stats['completion_rate']}% ({stats['done']}/{stats['total']})")
+            if plan.working_dir:
+                lines.append(f"     dir: {plan.working_dir}")
+            if plan.model:
+                lines.append(f"     model: {plan.model}")
+            lines.append(f"     started: {plan.started_at}")
+
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    async def _plan_get(self, args: dict) -> List[TextContent]:
+        """Plan 상세 조회"""
+        plan_id = args.get("plan_id")
+        if not plan_id:
+            return [TextContent(type="text", text="오류: plan_id는 필수 항목입니다.")]
+
+        plan = self.plan_manager.get_plan(plan_id)
+        if not plan:
+            return [TextContent(type="text", text=f"오류: ID {plan_id}인 Plan을 찾을 수 없습니다.")]
+
+        stats = self.plan_manager.get_plan_stats(plan.id, self.manager.todos)
+        plan_todos = self.manager.get_todos_by_plan(plan_id)
+
+        result = plan.to_dict()
+        result["stats"] = stats
+        result["todos"] = [
+            {"id": t.id, "content": t.content, "status": t.status, "type": t.type}
+            for t in plan_todos
+        ]
+
+        return [TextContent(
+            type="text",
+            text=f"📋 Plan 상세:\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+        )]
+
+    async def _plan_update(self, args: dict) -> List[TextContent]:
+        """Plan 수정"""
+        plan_id = args.get("plan_id")
+        if not plan_id:
+            return [TextContent(type="text", text="오류: plan_id는 필수 항목입니다.")]
+
+        updates = {k: v for k, v in args.items() if k != "plan_id" and v is not None}
+        plan = self.plan_manager.update_plan(plan_id, **updates)
+        if not plan:
+            return [TextContent(type="text", text=f"오류: ID {plan_id}인 Plan을 찾을 수 없습니다.")]
+
+        return [TextContent(
+            type="text",
+            text=f"Updated plan [{plan.id}] {plan.name}\n{json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)}"
+        )]
+
+    async def _plan_delete(self, args: dict) -> List[TextContent]:
+        """Plan 삭제"""
+        plan_id = args.get("plan_id")
+        if not plan_id:
+            return [TextContent(type="text", text="오류: plan_id는 필수 항목입니다.")]
+
+        plan = self.plan_manager.get_plan(plan_id)
+        if not plan:
+            return [TextContent(type="text", text=f"오류: ID {plan_id}인 Plan을 찾을 수 없습니다.")]
+
+        self.plan_manager.delete_plan(plan_id)
+        return [TextContent(
+            type="text",
+            text=f"Deleted plan [{plan_id}] {plan.name}"
         )]
 
     async def run(self):

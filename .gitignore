@@ -36,6 +36,10 @@ env/
 # Data files
 todos.json
 
+# Node
+node_modules/
+.venv/
+
 # OS
 .DS_Store
 Thumbs.db

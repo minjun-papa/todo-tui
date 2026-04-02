@@ -88,6 +88,39 @@ class Season:
 
 
 @dataclass
+class Plan:
+    """Plan 데이터 클래스 - Claude Code 작업 단위"""
+    id: int
+    name: str
+    status: str = "active"  # active, completed, cancelled
+    source: str = "claude_code"
+    working_dir: Optional[str] = None
+    model: Optional[str] = None
+    prompt: Optional[str] = None
+    started_at: str = ""
+    ended_at: Optional[str] = None
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status,
+            "source": self.source,
+            "working_dir": self.working_dir,
+            "model": self.model,
+            "prompt": self.prompt,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "metadata": self.metadata
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class TodoItem:
     """Todo 항목 데이터 클래스"""
     id: int
@@ -101,6 +134,7 @@ class TodoItem:
     completed_at: Optional[str] = None  # 완료 날짜
     parent_id: Optional[int] = None
     season_id: Optional[int] = None
+    plan_id: Optional[int] = None  # 연결된 Plan ID
     jira_key: Optional[str] = None  # Jira 이슈 키 (예: PROJ-123)
     jira_id: Optional[str] = None   # Jira 이슈 ID
     description: Optional[str] = None  # 항목 설명
@@ -119,6 +153,7 @@ class TodoItem:
             "completed_at": self.completed_at,
             "parent_id": self.parent_id,
             "season_id": self.season_id,
+            "plan_id": self.plan_id,
             "jira_key": self.jira_key,
             "jira_id": self.jira_id,
             "description": self.description,
@@ -131,7 +166,10 @@ class TodoItem:
         if "completed" in data and "status" not in data:
             data["status"] = "done" if data["completed"] else "todo"
             del data["completed"]
-        return cls(**data)
+        # plan_id 필드가 없는 기존 데이터 호환성
+        if "plan_id" not in data:
+            data["plan_id"] = None
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 class SeasonManager:
@@ -751,6 +789,111 @@ class TodoManager:
             self._save_todos()
             return True
         return False
+
+    def get_todos_by_plan(self, plan_id: int) -> List[TodoItem]:
+        """Plan에 속한 Todo 목록"""
+        return [t for t in self.todos if t.plan_id == plan_id]
+
+
+class PlanManager:
+    """Plan 관리 클래스"""
+
+    def __init__(self, todo_file_path: Path):
+        self.plans_file = todo_file_path.parent / "plans.json"
+        self.plans: List[Plan] = []
+        self._load_plans()
+
+    def _load_plans(self):
+        """Plan 데이터 로드"""
+        if not self.plans_file.exists():
+            self.plans = []
+            return
+        try:
+            with open(self.plans_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.plans = [Plan.from_dict(item) for item in data]
+        except (json.JSONDecodeError, KeyError):
+            self.plans = []
+
+    def _save_plans(self):
+        """Plan 데이터 저장"""
+        self.plans_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.plans_file, "w", encoding="utf-8") as f:
+            json.dump([p.to_dict() for p in self.plans], f, indent=2, ensure_ascii=False)
+
+    def create_plan(self, name: str, source: str = "claude_code",
+                    working_dir: Optional[str] = None, model: Optional[str] = None,
+                    prompt: Optional[str] = None, metadata: Optional[dict] = None) -> Plan:
+        """새 Plan 생성"""
+        new_id = max([p.id for p in self.plans], default=0) + 1
+        plan = Plan(
+            id=new_id,
+            name=name,
+            status="active",
+            source=source,
+            working_dir=working_dir,
+            model=model,
+            prompt=prompt,
+            started_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            metadata=metadata or {}
+        )
+        self.plans.append(plan)
+        self._save_plans()
+        return plan
+
+    def get_plan(self, plan_id: int) -> Optional[Plan]:
+        """Plan 조회"""
+        for plan in self.plans:
+            if plan.id == plan_id:
+                return plan
+        return None
+
+    def list_plans(self, status: Optional[str] = None) -> List[Plan]:
+        """Plan 목록 조회"""
+        if status:
+            return [p for p in self.plans if p.status == status]
+        return self.plans
+
+    def end_plan(self, plan_id: int) -> Optional[Plan]:
+        """Plan 종료"""
+        plan = self.get_plan(plan_id)
+        if plan:
+            plan.status = "completed"
+            plan.ended_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            self._save_plans()
+        return plan
+
+    def update_plan(self, plan_id: int, **kwargs) -> Optional[Plan]:
+        """Plan 업데이트"""
+        plan = self.get_plan(plan_id)
+        if plan:
+            for key, value in kwargs.items():
+                if hasattr(plan, key) and value is not None:
+                    setattr(plan, key, value)
+            self._save_plans()
+        return plan
+
+    def delete_plan(self, plan_id: int) -> bool:
+        """Plan 삭제"""
+        plan = self.get_plan(plan_id)
+        if plan:
+            self.plans.remove(plan)
+            self._save_plans()
+            return True
+        return False
+
+    def get_plan_stats(self, plan_id: int, todos: List[TodoItem]) -> dict:
+        """Plan 통계"""
+        plan_todos = [t for t in todos if t.plan_id == plan_id]
+        total = len(plan_todos)
+        done = sum(1 for t in plan_todos if t.status == "done")
+        return {
+            "total": total,
+            "todo": sum(1 for t in plan_todos if t.status == "todo"),
+            "in_progress": sum(1 for t in plan_todos if t.status == "in_progress"),
+            "done": done,
+            "completion_rate": round((done / total) * 100, 1) if total > 0 else 0
+        }
 
 
 class DescriptionPopup(Screen):
