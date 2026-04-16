@@ -1,3 +1,3 @@
-"""Todo TUI - Terminal Todo App with Jira sync support"""
+"""todo-tui v2 - Personal work management TUI with Season/Sprint/Daily hierarchy."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
